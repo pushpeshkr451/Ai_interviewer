@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Interviewer</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f4f4f9; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        .container { width: 80%; max-width: 600px; background: white; border-radius: 8px; box-shadow: 0 0 15px rgba(0,0,0,0.1); overflow: hidden; }
+        .setup, .chat-container, .api-key-container { padding: 25px; }
+        .chat-box { height: 400px; overflow-y: scroll; border-top: 1px solid #ddd; border-bottom: 1px solid #ddd; padding: 10px; }
+        .message { margin-bottom: 15px; padding: 8px 12px; border-radius: 18px; max-width: 80%; line-height: 1.4; }
+        .user { text-align: right; background-color: #007bff; color: white; margin-left: auto; }
+        .ai { text-align: left; background-color: #e9e9eb; color: #333; margin-right: auto; font-weight: 500;}
+        .controls { padding: 20px 0 0 0; text-align: center; }
+        h2 { text-align: center; color: #333; }
+        input, textarea, button { width: 100%; padding: 12px; margin-bottom: 15px; border-radius: 5px; border: 1px solid #ccc; box-sizing: border-box; font-size: 16px; }
+        textarea { resize: vertical; min-height: 80px; }
+        button { background-color: #007bff; color: white; border: none; cursor: pointer; font-size: 16px; font-weight: bold; transition: background-color 0.2s; }
+        button:disabled { background-color: #aaa; }
+        button.recording { background-color: #dc3545; }
+        #status, #api-error { margin-top: 10px; color: #666; }
+        #api-error { color: #dc3545; font-weight: bold;}
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div id="api-key-screen" class="api-key-container hidden">
+            <h2>Enter API Key</h2>
+            <p>Please provide your Gemini API key. It will be saved in your browser for future visits.</p>
+            <form id="api-key-form">
+                <input type="password" id="api-key-input" placeholder="Enter your API key here" required>
+                <button type="submit">Save and Continue</button>
+                <div id="api-error"></div>
+            </form>
+        </div>
+
+        <div id="setup-screen" class="setup hidden">
+            <h2>AI Interview Setup</h2>
+            <form id="setup-form">
+                <label for="job_role">Job Role:</label>
+                <textarea id="job_role" name="job_role" placeholder="e.g., Senior Python Developer" required></textarea>
+                <label for="resume">Upload Resume (PDF):</label>
+                <input type="file" id="resume" name="resume" accept=".pdf" required>
+                <button type="submit">Start Interview</button>
+            </form>
+        </div>
+
+        <div id="chat-screen" class="chat-container hidden">
+            <div class="chat-box" id="chat-box"></div>
+            <div class="controls">
+                <button id="record-btn">🎤 Start Recording</button>
+                <div id="status">Click the button to start recording your answer.</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- Element Selectors ---
+        const apiKeyScreen = document.getElementById('api-key-screen');
+        const setupScreen = document.getElementById('setup-screen');
+        const chatScreen = document.getElementById('chat-screen');
+        const apiKeyForm = document.getElementById('api-key-form');
+        const setupForm = document.getElementById('setup-form');
+        const recordBtn = document.getElementById('record-btn');
+        const chatBox = document.getElementById('chat-box');
+        const apiErrorDiv = document.getElementById('api-error');
+
+        // --- State Management Variables ---
+        let selectedVoice = null;
+        let isRecording = false;
+        let finalTranscript = '';
+
+        // --- Speech API Initialization ---
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        const recognition = new SpeechRecognition();
+        // Configure recognition to be continuous, allowing for pauses.
+        recognition.continuous = true;
+        recognition.interimResults = false; // We only need the final transcript.
+
+        // --- Core Application Logic ---
+
+        // This function runs as soon as the page loads.
+        window.addEventListener('load', () => {
+            const savedApiKey = localStorage.getItem('geminiApiKey');
+            if (savedApiKey) {
+                // If a key is found in storage, try to verify it with the backend.
+                configureServerWithKey(savedApiKey);
+            } else {
+                // If no key is found, show the screen to ask for one.
+                apiKeyScreen.classList.remove('hidden');
+            }
+        });
+
+        // Handles the submission of the API key form.
+        apiKeyForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const apiKey = document.getElementById('api-key-input').value.trim();
+            if (apiKey) {
+                configureServerWithKey(apiKey);
+            }
+        });
+
+        // Sends the API key to the backend for verification and configuration.
+        async function configureServerWithKey(apiKey) {
+            const button = apiKeyForm.querySelector('button');
+            button.disabled = true;
+            button.textContent = 'Verifying...';
+            apiErrorDiv.textContent = '';
+            
+            try {
+                const response = await fetch('/configure_key', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ apiKey: apiKey })
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.success) {
+                    // On successful verification, save the key and move to the next screen.
+                    localStorage.setItem('geminiApiKey', apiKey);
+                    apiKeyScreen.classList.add('hidden');
+                    setupScreen.classList.remove('hidden');
+                } else {
+                    throw new Error(data.error || 'Invalid API Key.');
+                }
+            } catch (error) {
+                // If verification fails, remove any saved key and show an error.
+                localStorage.removeItem('geminiApiKey');
+                apiErrorDiv.textContent = `Error: ${error.message}`;
+                apiKeyScreen.classList.remove('hidden');
+                setupScreen.classList.add('hidden');
+                button.disabled = false;
+                button.textContent = 'Save and Continue';
+            }
+        }
+
+        // Handles the submission of the interview setup form (resume and job role).
+        setupForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = new FormData(setupForm);
+            const startButton = setupForm.querySelector('button');
+            startButton.disabled = true;
+            startButton.textContent = 'Analyzing...';
+            try {
+                const response = await fetch('/start_interview', { method: 'POST', body: formData });
+                const data = await response.json();
+                if (response.ok) {
+                    // On success, display the first question and switch to the chat screen.
+                    addMessage(data.reply, 'ai');
+                    speak(data.reply);
+                    setupScreen.classList.add('hidden');
+                    chatScreen.classList.remove('hidden');
+                } else { 
+                    alert('Error: ' + data.error); 
+                }
+            } catch (error) {
+                alert('An error occurred. Please check the console.');
+                console.error("Error:", error);
+            } finally {
+                startButton.disabled = false;
+                startButton.textContent = 'Start Interview';
+            }
+        });
+        
+        // --- Speech Recognition Event Handlers ---
+
+        // Toggles recording on and off when the button is clicked.
+        recordBtn.addEventListener('click', () => {
+            if (isRecording) {
+                recognition.stop();
+            } else {
+                finalTranscript = ''; // Clear previous transcript before starting.
+                recognition.start();
+            }
+        });
+
+        // Updates UI when recognition starts.
+        recognition.onstart = () => {
+            isRecording = true;
+            recordBtn.textContent = '🛑 Stop Recording';
+            recordBtn.classList.add('recording');
+            document.getElementById('status').textContent = 'Listening... Click again when finished.';
+        };
+
+        // Gathers and assembles the final transcript from speech events.
+        recognition.onresult = (event) => {
+            let newTranscript = '';
+            for (let i = 0; i < event.results.length; i++) {
+                newTranscript += event.results[i][0].transcript;
+            }
+            finalTranscript = newTranscript;
+        };
+        
+        // Finalizes the process when recognition ends.
+        recognition.onend = () => {
+            isRecording = false;
+            recordBtn.textContent = '🎤 Start Recording';
+            recordBtn.classList.remove('recording');
+            document.getElementById('status').textContent = 'Click the button to start recording.';
+            // Sends the complete, final transcript to the server.
+            sendTranscriptToServer(finalTranscript);
+        };
+
+        // Catches any errors from the speech recognition engine.
+        recognition.onerror = (event) => {
+            console.error('Speech recognition error detected:', event.error);
+            document.getElementById('status').textContent = 'Error during recognition: ' + event.error;
+        };
+        
+        // --- Helper Functions ---
+
+        // Sends the user's spoken text to the backend.
+        async function sendTranscriptToServer(transcript) {
+            if (!transcript.trim()) return; // Don't send empty messages.
+            addMessage(transcript, 'user');
+            try {
+                const response = await fetch('/send_message', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message: transcript })
+                });
+                const data = await response.json();
+                addMessage(data.reply, 'ai');
+                speak(data.reply);
+            } catch (error) {
+                console.error("Error sending message to server:", error);
+                addMessage("Sorry, there was an error connecting to the server.", 'ai');
+            }
+        }
+
+        // Adds a message to the chatbox UI.
+        function addMessage(text, sender) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${sender}`;
+            messageDiv.textContent = text;
+            chatBox.appendChild(messageDiv);
+            chatBox.scrollTop = chatBox.scrollHeight; // Auto-scroll to the latest message.
+        }
+
+        // Text-to-speech function to make the AI speak.
+        function speak(text) {
+            speechSynthesis.cancel(); 
+            const utterance = new SpeechSynthesisUtterance(text);
+            if (selectedVoice) {
+                utterance.voice = selectedVoice;
+            }
+            speechSynthesis.speak(utterance);
+        }
+
+        // Loads and selects a preferred voice from the browser's available voices.
+        function loadVoices() {
+            const voices = speechSynthesis.getVoices();
+            selectedVoice = voices.find(voice => voice.lang === 'en-US' && voice.name.includes('Alex')) ||
+                            voices.find(voice => voice.lang === 'en-US' && voice.name.includes('Google') && voice.gender === 'male') ||
+                            voices.find(voice => voice.lang === 'en-US' && voice.gender === 'male') ||
+                            voices.find(voice => voice.lang === 'en-US'); // Fallback.
+        }
+        speechSynthesis.onvoiceschanged = loadVoices;
+        loadVoices();
+
+    </script>
+</body>
+</html>
