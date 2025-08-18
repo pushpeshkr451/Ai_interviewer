@@ -35,6 +35,7 @@ You can try the live application here:
 Follow these steps to set up the project on your local machine.
 
 ### 1. Clone the Repository
-```bash
+```
 git clone [https://github.com/pushpeshkr451/Ai_interviewer.git](https://github.com/pushpeshkr451/Ai_interviewer.git)
 cd Ai_interviewer
+```
